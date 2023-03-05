@@ -11,8 +11,7 @@ const char appDataPredefPassword[] PROGMEM = "ewcXoCt4HHjZUvY1";
 #include "data\status1.html.gz.h"
 #include "data\config1.html.gz.h"
 
-//TODO : Rename MyApplication
-class MyApplication : public Application
+class WIzar : public Application
 {
 private:
   //TODO : Declare configuration properies
@@ -33,7 +32,7 @@ private:
   void appRun();
 
 public:
-  MyApplication(char appId, String fileName);
+  WIzar(char appId, String fileName);
 };
 
 #endif

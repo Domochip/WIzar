@@ -10,7 +10,7 @@
 #define APPLICATION1_HEADER "WirelessIzar.h"
 #define APPLICATION1_NAME "WBase"
 #define APPLICATION1_DESC "DomoChip Wireless Izar"
-#define APPLICATION1_CLASS MyApplication
+#define APPLICATION1_CLASS WIzar
 
 #define VERSION_NUMBER "3.X"
 
