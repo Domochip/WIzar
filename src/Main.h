@@ -29,7 +29,7 @@
 #define LOG_SERIAL_SPEED 115200
 
 //Choose Pin used to boot in Rescue Mode
-#define RESCUE_BTN_PIN 2
+// #define RESCUE_BTN_PIN 2
 
 //Define time to wait for Rescue press (in s)
 //#define RESCUE_BUTTON_WAIT 3
