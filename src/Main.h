@@ -12,7 +12,7 @@
 #define APPLICATION1_DESC "DomoChip Wireless Izar"
 #define APPLICATION1_CLASS WIzar
 
-#define VERSION_NUMBER "3.X"
+#define VERSION_NUMBER "3.0"
 
 #define DEFAULT_AP_SSID "WirelessIzar"
 #define DEFAULT_AP_PSK "PasswordIzar"
