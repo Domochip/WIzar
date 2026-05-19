@@ -1,123 +1,126 @@
 #include "WIzar.h"
 
 //------------------------------------------
-//Used to initialize configuration properties to default values
-void WIzar::setConfigDefaultValues(){
-    //TODO
-    //property1 = 0;
-    //property2 = F("test");
-};
-//------------------------------------------
-//Parse JSON object into configuration properties
-void WIzar::parseConfigJSON(DynamicJsonDocument &doc){
-    //TODO
-    //if (!doc["prop1"].isNull()) property1 = doc[F("prop1")];
-    //if (!doc["prop2"].isNull()) strlcpy(property2, doc["prop2"], sizeof(property2));
-};
-//------------------------------------------
-//Parse HTTP POST parameters in request into configuration properties
-bool WIzar::parseConfigWebRequest(AsyncWebServerRequest *request)
+// Used to initialize configuration properties to default values
+void WIzar::setConfigDefaultValues()
 {
-    //TODO
-    // if (!request->hasParam(F("prop1"), true))
-    // {
-    //     request->send(400, F("text/html"), F("prop1 missing"));
-    //     return false;
-    // }
-    //if (request->hasParam(F("prop1"), true)) property1 = request->getParam(F("prop1"), true)->value().toInt();
-    //if (request->hasParam(F("prop2"), true) && request->getParam(F("prop2"), true)->value().length() < sizeof(property2)) strcpy(property2, request->getParam(F("prop2"), true)->value().c_str());
-
-    return true;
-};
-//------------------------------------------
-//Generate JSON from configuration properties
-String WIzar::generateConfigJSON(bool forSaveFile = false)
-{
-    String gc('{');
-    //TODO
-    // gc = gc + F("\"p1\":") + (property1 ? true : false);
-    // gc = gc + F("\"p2\":\"") + property2 + '"';
-
-    gc += '}';
-
-    return gc;
-};
-//------------------------------------------
-//Generate JSON of application status
-String WIzar::generateStatusJSON()
-{
-    String gs('{');
-
-    //TODO
-    // gs = gs + F("\"p1\":") + (property1 ? true : false);
-    // gs = gs + F(",\"p2\":\"") + property2 + '"';
-
-    gs += '}';
-
-    return gs;
-};
-//------------------------------------------
-//code to execute during initialization and reinitialization of the app
-bool WIzar::appInit(bool reInit)
-{
-    _izarWmbusReader.init(_meterId);
-
-    return true;
-};
-//------------------------------------------
-//Return HTML Code to insert into Status Web page
-const uint8_t* WIzar::getHTMLContent(WebPageForPlaceHolder wp){
-      switch(wp){
-    case status:
-      return (const uint8_t*) status1htmlgz;
-      break;
-    case config:
-      return (const uint8_t*) config1htmlgz;
-      break;
-    default:
-      return nullptr;
-      break;
-  };
-  return nullptr;
-};
-//and his Size
-size_t WIzar::getHTMLContentSize(WebPageForPlaceHolder wp){
-  switch(wp){
-    case status:
-      return sizeof(status1htmlgz);
-      break;
-    case config:
-      return sizeof(config1htmlgz);
-      break;
-    default:
-      return 0;
-      break;
-  };
-  return 0;
-};
-
-//------------------------------------------
-//code to register web request answer to the web server
-void WIzar::appInitWebServer(AsyncWebServer &server, bool &shouldReboot, bool &pauseApplication){
-    //TODO
-    //server.on("/getColor", HTTP_GET, [this](AsyncWebServerRequest * request) {request->send(200, F("text/html"), GetColor());});
-};
-
-//------------------------------------------
-//Run for timer
-void WIzar::appRun()
-{
-    FetchResult res = _izarWmbusReader.fetchPacket(&_izarData);
-    if (res == FETCH_SUCCESSFUL)
-    {
-      //TODO
-    }
+  // TODO
+  // property1 = 0;
+  // property2 = F("test");
 }
 
 //------------------------------------------
-//Constructor
-WIzar::WIzar(char appId, String appName) : Application(appId, appName)
+// Parse JSON object into configuration properties
+bool WIzar::parseConfigJSON(JsonDocument &doc, bool fromWebPage = false)
 {
-    //TODO : Initialize special structure or libraries in constructor
-    //Note : most of the time, init is done during AppInit based on configuration
+  // Be carefull about the type of the properties
+  // when Json is coming from web page (fromWebPage = true), all properties are string
+  // when Json is coming from savefile, property types are defined by the generateConfigJSON
+
+  // TODO
+  // JsonVariant jv;
+
+  // example for numeric value
+  // if ((jv = doc[F("prop1")]).is<JsonVariant>()) // check if property is present
+  //   property1 = jv; // if the property is a string, it will be automatically converted to a number (be carefull default value if conversion fail is 0)
+
+  // example for string value
+  // if ((jv = doc[F("prop2")]).is<const char *>()) // do a more precise check about the type otherwise strlcpy will crash
+  //   strlcpy(property2, jv, sizeof(property2));
+
+  // example for boolean value
+  // property3 = jv; // html checkbox will send "on" string or no json property so direct conversion fit the need
+
+  return true;
+}
+
+//------------------------------------------
+// Generate JSON from configuration properties
+void WIzar::fillConfigJSON(JsonDocument &doc, bool forSaveFile)
+{
+  // TODO
+  // doc["p1"] = property1;
+  // doc["p2"] = property2;
+}
+
+//------------------------------------------
+// Generate JSON of application status
+void WIzar::fillStatusJSON(JsonDocument &doc)
+{
+  // TODO
+  // doc["p1"] = property1;
+  // doc["p2"] = property2;
+}
+
+//------------------------------------------
+// code to execute during initialization and reinitialization of the app
+bool WIzar::appInit(bool reInit)
+{
+  _izarWmbusReader.init(_meterId);
+
+  return true;
+}
+
+//------------------------------------------
+// Return HTML Code to insert into Status Web page
+const PROGMEM char *WIzar::getHTMLContent(WebPageForPlaceHolder wp)
+{
+  switch (wp)
+  {
+  case status:
+    return status2htmlgz;
+    break;
+  case config:
+    return config2htmlgz;
+    break;
+  default:
+    return nullptr;
+    break;
+  };
+  return nullptr;
+}
+
+// and his Size
+size_t WIzar::getHTMLContentSize(WebPageForPlaceHolder wp)
+{
+  switch (wp)
+  {
+  case status:
+    return sizeof(status2htmlgz);
+    break;
+  case config:
+    return sizeof(config2htmlgz);
+    break;
+  default:
+    return 0;
+    break;
+  };
+  return 0;
+}
+
+//------------------------------------------
+// code to register web request answer to the web server
+void WIzar::appInitWebServer(WebServer &server)
+{
+  // TODO
+  // server.on(F("/getColor"), HTTP_GET, [this, &server]() {server.send(200, F("text/html"), GetColor());});
+}
+
+//------------------------------------------
+// Run for timer
+void WIzar::appRun()
+{
+  FetchResult res = _izarWmbusReader.fetchPacket(&_izarData);
+  if (res == FETCH_SUCCESSFUL)
+  {
+    // TODO
+  }
+}
+
+//------------------------------------------
+// Constructor
+WIzar::WIzar() : Application(CustomApp)
+{
+  // TODO : Initialize special structure or libraries in constructor
+  // Note : most of the time, init is done during AppInit based on configuration
 }

@@ -50,18 +50,17 @@ private:
   MQTTMan _mqttMan;
 
   void setConfigDefaultValues();
-  void parseConfigJSON(DynamicJsonDocument &doc);
-  bool parseConfigWebRequest(AsyncWebServerRequest *request);
-  String generateConfigJSON(bool forSaveFile);
-  String generateStatusJSON();
+  bool parseConfigJSON(JsonDocument &doc, bool fromWebPage);
+  void fillConfigJSON(JsonDocument &doc, bool forSaveFile);
+  void fillStatusJSON(JsonDocument &doc);
   bool appInit(bool reInit);
-  const uint8_t *getHTMLContent(WebPageForPlaceHolder wp);
+  const PROGMEM char *getHTMLContent(WebPageForPlaceHolder wp);
   size_t getHTMLContentSize(WebPageForPlaceHolder wp);
-  void appInitWebServer(AsyncWebServer &server, bool &shouldReboot, bool &pauseApplication);
+  void appInitWebServer(WebServer &server);
   void appRun();
 
 public:
-  WIzar(char appId, String fileName);
+  WIzar();
 };
 
 #endif
