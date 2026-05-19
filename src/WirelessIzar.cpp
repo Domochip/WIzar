@@ -60,8 +60,7 @@ String WIzar::generateStatusJSON()
 //code to execute during initialization and reinitialization of the app
 bool WIzar::appInit(bool reInit)
 {
-    //TODO
-    //if (toto.enabled) _sendTimer.setInterval(SEND_PERIOD, [this]() {this->SendTimerTick();});
+    _izarWmbusReader.init(_meterId);
 
     return true;
 };
@@ -108,7 +107,11 @@ void WIzar::appInitWebServer(AsyncWebServer &server, bool &shouldReboot, bool &p
 //Run for timer
 void WIzar::appRun()
 {
-    //TODO : implement run tasks (receive from serial, run timer, etc.)
+    FetchResult res = _izarWmbusReader.fetchPacket(&_izarData);
+    if (res == FETCH_SUCCESSFUL)
+    {
+      //TODO
+    }
 }
 
 //------------------------------------------
