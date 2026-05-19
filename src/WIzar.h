@@ -1,15 +1,14 @@
-#ifndef WirelessIzar_h
-#define WirelessIzar_h
+#ifndef WIzar_h
+#define WIzar_h
 
 #include "Main.h"
-#include "base\Utils.h"
-#include "base\MQTTMan.h"
-#include "base\Application.h"
+#include "base/MQTTMan.h"
+#include "base/Application.h"
 
 const char appDataPredefPassword[] PROGMEM = "ewcXoCt4HHjZUvY1";
 
-#include "data\status1.html.gz.h"
-#include "data\config1.html.gz.h"
+#include "data/status2.html.gz.h"
+#include "data/config2.html.gz.h"
 
 #include <izar_wmbus.h>
 

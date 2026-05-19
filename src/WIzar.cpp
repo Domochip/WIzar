@@ -1,4 +1,4 @@
-#include "WirelessIzar.h"
+#include "WIzar.h"
 
 //------------------------------------------
 //Used to initialize configuration properties to default values
