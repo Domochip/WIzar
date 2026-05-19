@@ -1,64 +1,85 @@
 #include "WifiMan.h"
 
+static const char *formatIP(char (&buf)[16], uint32_t v)
+{
+  snprintf_P(buf, sizeof(buf), PSTR("%u.%u.%u.%u"), (uint8_t)v, (uint8_t)(v >> 8), (uint8_t)(v >> 16), (uint8_t)(v >> 24));
+  return buf;
+}
+
 void WifiMan::enableAP(bool force = false)
 {
   if (!(WiFi.getMode() & WIFI_AP) || force)
   {
     WiFi.enableAP(true);
-    WiFi.softAP(_apSsid, DEFAULT_AP_PSK, _apChannel);
+    WiFi.softAP(F(DEFAULT_AP_SSID), F(DEFAULT_AP_PSK), _apChannel);
+    // Free existing DNS server if any, and start a new one
+    if (_dnsServer)
+    {
+      _dnsServer->stop();
+      delete _dnsServer;
+    }
+    _dnsServer = new DNSServer();
+    _dnsServer->setErrorReplyCode(DNSReplyCode::NoError);
+    while (WiFi.softAPIP() == INADDR_NONE)
+    {
+      delay(10);
+    }
+    _dnsServer->start(53, F("*"), WiFi.softAPIP());
   }
 }
 
 void WifiMan::refreshWiFi()
 {
-  if (ssid[0]) //if STA configured
+  if (ssid[0]) // if STA configured
   {
     if (!WiFi.isConnected() || WiFi.SSID() != ssid || WiFi.psk() != password)
     {
       enableAP();
-#ifdef LOG_SERIAL
-      LOG_SERIAL.print(F("Connect"));
-#endif
+
+      LOG_SERIAL_PRINT(F("Connect"));
+
       WiFi.begin(ssid, password);
       WiFi.config(ip, gw, mask, dns1, dns2);
 
-      //Wait _reconnectDuration for connection
+      // Wait _reconnectDuration for connection
       for (int i = 0; i < (((uint16_t)_reconnectDuration) * 10) && !WiFi.isConnected(); i++)
       {
         if ((i % 10) == 0)
-        {
-#ifdef LOG_SERIAL
-          LOG_SERIAL.print(".");
-#endif
-        }
+          LOG_SERIAL_PRINT(".");
         delay(100);
       }
 
-      //if connection is successfull
+      // if connection is successfull
       if (WiFi.isConnected())
       {
-        WiFi.enableAP(false); //disable AP
+        // stop DNS server
+        _dnsServer->stop();
+        delete _dnsServer;
+        _dnsServer = nullptr;
+        // disable AP
+        WiFi.enableAP(false);
 #ifdef STATUS_LED_GOOD
         STATUS_LED_GOOD
 #endif
 
-#ifdef LOG_SERIAL
-        LOG_SERIAL.print(F("Connected ("));
-        LOG_SERIAL.print(WiFi.localIP());
-        LOG_SERIAL.print(F(") "));
-#endif
+        char ipBuf[16];
+        LOG_SERIAL_PRINTF_P(PSTR("Connected (%s) "), formatIP(ipBuf, static_cast<uint32_t>(WiFi.localIP())));
       }
-      else //connection failed
+      else // connection failed
       {
         WiFi.disconnect();
-#ifdef LOG_SERIAL
-        LOG_SERIAL.print(F("AP not found "));
+        LOG_SERIAL_PRINT(F("AP not found "));
+#ifdef ESP8266
+        _refreshTicker.once(_refreshPeriod, [this]()
+                            { _needRefreshWifi = true; });
+#else
+        _refreshTicker.once<typeof this>(_refreshPeriod, [](typeof this wifiMan)
+                                         { wifiMan->_needRefreshWifi = true; }, this);
 #endif
-        _refreshTicker.once(_refreshPeriod, [this]() { _needRefreshWifi = true; });
       }
     }
   }
-  else //else if AP is configured
+  else // else if AP is configured
   {
     _refreshTicker.detach();
     enableAP();
@@ -67,13 +88,8 @@ void WifiMan::refreshWiFi()
     STATUS_LED_GOOD
 #endif
 
-#ifdef LOG_SERIAL
-    LOG_SERIAL.print(F(" AP mode("));
-    LOG_SERIAL.print(_apSsid);
-    LOG_SERIAL.print(F(" - "));
-    LOG_SERIAL.print(WiFi.softAPIP());
-    LOG_SERIAL.print(F(") "));
-#endif
+    char ipBuf[16];
+    LOG_SERIAL_PRINTF_P(PSTR(" AP mode(%s - %s) "), F(DEFAULT_AP_SSID), formatIP(ipBuf, static_cast<uint32_t>(WiFi.softAPIP())));
   }
 }
 
@@ -81,7 +97,7 @@ void WifiMan::setConfigDefaultValues()
 {
   ssid[0] = 0;
   password[0] = 0;
-  hostname[0] = 0;
+  strcpy_P(hostname, PSTR(CUSTOM_APP_MODEL));
   ip = 0;
   gw = 0;
   mask = 0;
@@ -89,204 +105,150 @@ void WifiMan::setConfigDefaultValues()
   dns2 = 0;
 }
 
-void WifiMan::parseConfigJSON(DynamicJsonDocument &doc)
+bool WifiMan::parseConfigJSON(JsonDocument &doc, bool fromWebPage = false)
 {
-  if (!doc["s"].isNull())
-    strlcpy(ssid, doc["s"], sizeof(ssid));
-
-  if (!doc["p"].isNull())
-    strlcpy(password, doc["p"], sizeof(password));
-
-  if (!doc["h"].isNull())
-    strlcpy(hostname, doc["h"], sizeof(hostname));
-
-  if (!doc["ip"].isNull())
-    ip = doc["ip"];
-  if (!doc["gw"].isNull())
-    gw = doc["gw"];
-  if (!doc["mask"].isNull())
-    mask = doc["mask"];
-  if (!doc["dns1"].isNull())
-    dns1 = doc["dns1"];
-  if (!doc["dns2"].isNull())
-    dns2 = doc["dns2"];
-}
-
-bool WifiMan::parseConfigWebRequest(AsyncWebServerRequest *request)
-{
-
-  //basic control
-  if (!request->hasParam(F("s"), true))
-  {
-    request->send(400, F("text/html"), F("SSID missing"));
-    return false;
-  }
-
+  JsonVariant jv;
   char tempPassword[64 + 1] = {0};
 
-  if (request->hasParam(F("s"), true) && request->getParam(F("s"), true)->value().length() < sizeof(ssid))
-    strcpy(ssid, request->getParam(F("s"), true)->value().c_str());
+  if ((jv = doc["s"]).is<const char *>())
+    strlcpy(ssid, jv, sizeof(ssid));
 
-  if (request->hasParam(F("p"), true) && request->getParam(F("p"), true)->value().length() < sizeof(tempPassword))
-    strcpy(tempPassword, request->getParam(F("p"), true)->value().c_str());
-  if (request->hasParam(F("h"), true) && request->getParam(F("h"), true)->value().length() < sizeof(hostname))
-    strcpy(hostname, request->getParam(F("h"), true)->value().c_str());
+  if ((jv = doc["p"]).is<const char *>())
+  {
+    strlcpy(tempPassword, jv, sizeof(tempPassword));
+
+    // if not from web page or password is not the predefined one
+    if (!fromWebPage || strcmp_P(tempPassword, predefPassword))
+      strcpy(password, tempPassword);
+  }
+
+  if ((jv = doc["h"]).is<const char *>())
+    strlcpy(hostname, jv, sizeof(hostname));
 
   IPAddress ipParser;
-  if (request->hasParam(F("ip"), true))
+  if ((jv = doc["ip"]).is<const char *>())
   {
-    if (ipParser.fromString(request->getParam(F("ip"), true)->value()))
+    if (ipParser.fromString(jv.as<const char *>()))
       ip = static_cast<uint32_t>(ipParser);
     else
       ip = 0;
   }
-  if (request->hasParam(F("gw"), true))
+
+  if ((jv = doc["gw"]).is<const char *>())
   {
-    if (ipParser.fromString(request->getParam(F("gw"), true)->value()))
+    if (ipParser.fromString(jv.as<const char *>()))
       gw = static_cast<uint32_t>(ipParser);
     else
       gw = 0;
   }
-  if (request->hasParam(F("mask"), true))
+
+  if ((jv = doc[F("mask")]).is<const char *>())
   {
-    if (ipParser.fromString(request->getParam(F("mask"), true)->value()))
+    if (ipParser.fromString(jv.as<const char *>()))
       mask = static_cast<uint32_t>(ipParser);
     else
       mask = 0;
   }
-  if (request->hasParam(F("dns1"), true))
+
+  if ((jv = doc[F("dns1")]).is<const char *>())
   {
-    if (ipParser.fromString(request->getParam(F("dns1"), true)->value()))
+    if (ipParser.fromString(jv.as<const char *>()))
       dns1 = static_cast<uint32_t>(ipParser);
     else
       dns1 = 0;
   }
-  if (request->hasParam(F("dns2"), true))
+
+  if ((jv = doc[F("dns2")]).is<const char *>())
   {
-    if (ipParser.fromString(request->getParam(F("dns2"), true)->value()))
+    if (ipParser.fromString(jv.as<const char *>()))
       dns2 = static_cast<uint32_t>(ipParser);
     else
       dns2 = 0;
   }
 
-  //check for previous password ssid (there is a predefined special password that mean to keep already saved one)
-  if (strcmp_P(tempPassword, predefPassword))
-    strcpy(password, tempPassword);
-
   return true;
 }
-String WifiMan::generateConfigJSON(bool forSaveFile = false)
+
+void WifiMan::fillConfigJSON(JsonDocument &doc, bool forSaveFile)
 {
-
-  String gc('{');
-  gc = gc + F("\"s\":\"") + ssid + '"';
+  doc["s"] = ssid;
 
   if (forSaveFile)
-    gc = gc + F(",\"p\":\"") + password + '"';
+    doc["p"] = password;
   else
-    //there is a predefined special password (mean to keep already saved one)
-    gc = gc + F(",\"p\":\"") + (__FlashStringHelper *)predefPassword + '"';
-  gc = gc + F(",\"h\":\"") + hostname + '"';
+    // there is a predefined special password (mean to keep already saved one)
+    doc["p"] = (const __FlashStringHelper *)predefPassword;
 
-  if (forSaveFile)
-  {
-    gc = gc + F(",\"ip\":") + ip;
-    gc = gc + F(",\"gw\":") + gw;
-    gc = gc + F(",\"mask\":") + mask;
-    gc = gc + F(",\"dns1\":") + dns1;
-    gc = gc + F(",\"dns2\":") + dns2;
-  }
+  doc["h"] = hostname;
+
+  doc[F("staticip")] = (ip ? 1 : 0);
+
+  char ipBuf[16];
+  if (ip)
+    doc["ip"] = formatIP(ipBuf, ip);
+  if (gw)
+    doc["gw"] = formatIP(ipBuf, gw);
   else
-  {
-    gc = gc + F(",\"staticip\":") + (ip ? true : false);
-    if (ip)
-      gc = gc + F(",\"ip\":\"") + IPAddress(ip).toString() + '"';
-    if (gw)
-      gc = gc + F(",\"gw\":\"") + IPAddress(gw).toString() + '"';
-    else
-      gc = gc + F(",\"gw\":\"0.0.0.0\"");
-    if (mask)
-      gc = gc + F(",\"mask\":\"") + IPAddress(mask).toString() + '"';
-    else
-      gc = gc + F(",\"mask\":\"0.0.0.0\"");
-    if (dns1)
-      gc = gc + F(",\"dns1\":\"") + IPAddress(dns1).toString() + '"';
-    if (dns2)
-      gc = gc + F(",\"dns2\":\"") + IPAddress(dns2).toString() + '"';
-  }
-
-  gc = gc + '}';
-
-  return gc;
+    doc["gw"] = F("0.0.0.0");
+  if (mask)
+    doc[F("mask")] = formatIP(ipBuf, mask);
+  else
+    doc[F("mask")] = F("0.0.0.0");
+  if (dns1)
+    doc[F("dns1")] = formatIP(ipBuf, dns1);
+  if (dns2)
+    doc[F("dns2")] = formatIP(ipBuf, dns2);
 }
 
-String WifiMan::generateStatusJSON()
+void WifiMan::fillStatusJSON(JsonDocument &doc)
 {
+  char ipBuf[16];
 
-  String gs('{');
   if ((WiFi.getMode() & WIFI_AP))
   {
-    gs = gs + F("\"ap\":\"on\"");
-    gs = gs + F(",\"ai\":\"") + WiFi.softAPIP().toString().c_str() + '"';
+    doc[F("apmode")] = F("on");
+    doc[F("apip")] = formatIP(ipBuf, static_cast<uint32_t>(WiFi.softAPIP()));
   }
   else
+    doc[F("apmode")] = F("off");
+
+  if (ssid[0])
   {
-    gs = gs + F("\"ap\":\"off\"");
-    gs = gs + F(",\"ai\":\"-\"");
+    doc[F("stationmode")] = F("on");
+    if (WiFi.isConnected())
+    {
+      doc[F("stationip")] = formatIP(ipBuf, static_cast<uint32_t>(WiFi.localIP()));
+      doc[F("stationipsource")] = ip ? F("Static IP") : F("DHCP");
+    }
   }
+  else
+    doc[F("stationmode")] = F("off");
 
-  gs = gs + F(",\"sta\":\"") + (ssid[0] ? F("on") : F("off")) + '"';
-  gs = gs + F(",\"stai\":\"") + (ssid[0] ? (WiFi.isConnected() ? ((WiFi.localIP().toString() + ' ' + (ip ? F("Static IP") : F("DHCP"))).c_str()) : "Not Connected") : "-") + '"';
-
-  gs = gs + F(",\"mac\":\"") + WiFi.macAddress() + '"';
-
-  gs = gs + '}';
-
-  return gs;
+  uint8_t macBuf[6];
+  char mac[18];
+  WiFi.macAddress(macBuf);
+  snprintf_P(mac, sizeof(mac), PSTR("%02X:%02X:%02X:%02X:%02X:%02X"), macBuf[0], macBuf[1], macBuf[2], macBuf[3], macBuf[4], macBuf[5]);
+  doc[F("mac")] = mac;
 }
 
 bool WifiMan::appInit(bool reInit = false)
 {
-  if (!reInit)
-  {
-    //build "unique" AP name (DEFAULT_AP_SSID + 4 last digit of ChipId)
-    _apSsid[0] = 0;
-    strcpy(_apSsid, DEFAULT_AP_SSID);
-#ifdef ESP8266
-    uint16_t id = ESP.getChipId() & 0xFFFF;
-#else
-    uint16_t id = (uint32_t)(ESP.getEfuseMac() << 40 >> 40);
-#endif
 
-    byte endOfSsid = strlen(_apSsid);
-    byte num = (id & 0xF000) / 0x1000;
-    _apSsid[endOfSsid] = num + ((num <= 9) ? 0x30 : 0x37);
-    num = (id & 0xF00) / 0x100;
-    _apSsid[endOfSsid + 1] = num + ((num <= 9) ? 0x30 : 0x37);
-    num = (id & 0xF0) / 0x10;
-    _apSsid[endOfSsid + 2] = num + ((num <= 9) ? 0x30 : 0x37);
-    num = id & 0xF;
-    _apSsid[endOfSsid + 3] = num + ((num <= 9) ? 0x30 : 0x37);
-    _apSsid[endOfSsid + 4] = 0;
-  }
-
-  //make changes saved to flash
+  // make changes saved to flash
   WiFi.persistent(true);
 
-  //Enable AP at start
+  // Enable AP at start
   enableAP(true);
 
-  //Stop RefreshWiFi and disconnect before WiFi operations -----
+  // Stop RefreshWiFi and disconnect before WiFi operations -----
   _refreshTicker.detach();
   WiFi.disconnect();
 
   // scan networks to search for best free channel
   int n = WiFi.scanNetworks();
 
-#ifdef LOG_SERIAL
-  LOG_SERIAL.print(n);
-  LOG_SERIAL.print(F("N-CH"));
-#endif
+  LOG_SERIAL_PRINTF_P(PSTR("%dN-CH"), n);
+
   if (n)
   {
     while (_apChannel < 12)
@@ -299,63 +261,92 @@ bool WifiMan::appInit(bool reInit = false)
       _apChannel++;
     }
   }
-#ifdef LOG_SERIAL
-  LOG_SERIAL.print(_apChannel);
-  LOG_SERIAL.print(' ');
-#endif
 
-  //Configure handlers
+  LOG_SERIAL_PRINT(_apChannel);
+  LOG_SERIAL_PRINT(' ');
+
+  // Configure handlers
   if (!reInit)
   {
-    _discoEventHandler = WiFi.onStationModeDisconnected([this](const WiFiEventStationModeDisconnected &evt) {
-      if (!(WiFi.getMode() & WIFI_AP) && ssid[0])
-      {
-        //stop reconnection
-        WiFi.disconnect();
-#ifdef LOG_SERIAL
-        LOG_SERIAL.println(F("Wifi disconnected"));
+#ifdef ESP8266
+    _discoEventHandler = WiFi.onStationModeDisconnected([this](const WiFiEventStationModeDisconnected &evt)
+#else
+    WiFi.onEvent([this](WiFiEvent_t event, WiFiEventInfo_t info)
 #endif
-        //call RefreshWifi shortly
-        _needRefreshWifi = true;
-      }
+                                                        {
+                                                          if (!(WiFi.getMode() & WIFI_AP) && ssid[0])
+                                                          {
+                                                            // stop reconnection
+                                                            WiFi.disconnect();
+                                                            LOG_SERIAL_PRINTLN(F("Wifi disconnected"));
+                                                            // call RefreshWifi shortly
+                                                            _needRefreshWifi = true;
+                                                          }
 #ifdef STATUS_LED_WARNING
-      STATUS_LED_WARNING
+                                                          STATUS_LED_WARNING
 #endif
-    });
+                                                        }
+#ifndef ESP8266
+                                                        ,
+                                                        WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_DISCONNECTED
+#endif
+    );
 
-    //if station connect to softAP
-    _staConnectedHandler = WiFi.onSoftAPModeStationConnected([this](const WiFiEventSoftAPModeStationConnected &evt) {
+    // if station connect to softAP
+#ifdef ESP8266
+    _staConnectedHandler = WiFi.onSoftAPModeStationConnected([this](const WiFiEventSoftAPModeStationConnected &evt)
+#else
+    WiFi.onEvent([this](WiFiEvent_t event, WiFiEventInfo_t info)
+#endif
+                                                             {
       //flag it in _stationConnectedToSoftAP
-      _stationConnectedToSoftAP = true;
-    });
-    //if station disconnect of the softAP
-    _staDisconnectedHandler = WiFi.onSoftAPModeStationDisconnected([this](const WiFiEventSoftAPModeStationDisconnected &evt) {
+      _stationConnectedToSoftAP = true; }
+#ifndef ESP8266
+                                                             ,
+                                                             WiFiEvent_t::ARDUINO_EVENT_WIFI_AP_STACONNECTED
+#endif
+    );
+
+    // if station disconnect of the softAP
+#ifdef ESP8266
+    _staDisconnectedHandler = WiFi.onSoftAPModeStationDisconnected([this](const WiFiEventSoftAPModeStationDisconnected &evt)
+#else
+    WiFi.onEvent([this](WiFiEvent_t event, WiFiEventInfo_t info)
+#endif
+                                                                   {
       //check if a station left
-      _stationConnectedToSoftAP = WiFi.softAPgetStationNum();
-    });
+      _stationConnectedToSoftAP = WiFi.softAPgetStationNum(); }
+#ifndef ESP8266
+                                                                   ,
+                                                                   WiFiEvent_t::ARDUINO_EVENT_WIFI_AP_STADISCONNECTED
+#endif
+    );
   }
 
-  //Set hostname
+  // Set hostname
   WiFi.hostname(hostname);
 
-  //Call RefreshWiFi to initiate configuration
+  // Call RefreshWiFi to initiate configuration
   refreshWiFi();
 
-  //right config so no need to touch again flash
+  // right config so no need to touch again flash
   WiFi.persistent(false);
 
-  return (ssid[0] ? WiFi.isConnected() : true);
-};
+  // start MDNS
+  MDNS.begin(CUSTOM_APP_MODEL);
 
-const uint8_t *WifiMan::getHTMLContent(WebPageForPlaceHolder wp)
+  return (ssid[0] ? WiFi.isConnected() : true);
+}
+
+const PROGMEM char *WifiMan::getHTMLContent(WebPageForPlaceHolder wp)
 {
   switch (wp)
   {
   case status:
-    return (const uint8_t *)statuswhtmlgz;
+    return status1htmlgz;
     break;
   case config:
-    return (const uint8_t *)configwhtmlgz;
+    return config1htmlgz;
     break;
   default:
     return nullptr;
@@ -368,61 +359,70 @@ size_t WifiMan::getHTMLContentSize(WebPageForPlaceHolder wp)
   switch (wp)
   {
   case status:
-    return sizeof(statuswhtmlgz);
+    return sizeof(status1htmlgz);
     break;
   case config:
-    return sizeof(configwhtmlgz);
+    return sizeof(config1htmlgz);
     break;
   default:
     return 0;
     break;
   };
   return 0;
-};
+}
 
-void WifiMan::appInitWebServer(AsyncWebServer &server, bool &shouldReboot, bool &pauseApplication)
+void WifiMan::appInitWebServer(WebServer &server)
 {
+  server.on(F("/wnl"), HTTP_GET,
+            [this, &server]()
+            {
+              // prepare response
+              SERVER_KEEPALIVE_FALSE()
+              server.sendHeader(F("Cache-Control"), F("no-cache"));
 
-  server.on("/wnl", HTTP_GET, [this](AsyncWebServerRequest *request) {
-    int8_t n = WiFi.scanComplete();
-    if (n == -2)
-    {
-      AsyncWebServerResponse *response = request->beginResponse(200, F("text/json"), F("{\"r\":-2,\"wnl\":[]}"));
-      response->addHeader("Cache-Control", "no-cache");
-      request->send(response);
-      WiFi.scanNetworks(true);
-    }
-    else if (n == -1)
-    {
-      AsyncWebServerResponse *response = request->beginResponse(200, F("text/json"), F("{\"r\":-1,\"wnl\":[]}"));
-      response->addHeader("Cache-Control", "no-cache");
-      request->send(response);
-    }
-    else
-    {
-      String networksJSON(F("{\"r\":"));
-      networksJSON = networksJSON + n + F(",\"wnl\":[");
-      for (byte i = 0; i < n; i++)
-      {
-        networksJSON = networksJSON + '"' + WiFi.SSID(i) + '"';
-        if (i != (n - 1))
-          networksJSON += ',';
-      }
-      networksJSON += F("]}");
-      AsyncWebServerResponse *response = request->beginResponse(200, F("text/json"), networksJSON);
-      response->addHeader("Cache-Control", "no-cache");
-      request->send(response);
-      WiFi.scanDelete();
-    }
-  });
+              int8_t n = WiFi.scanComplete();
+              if (n == -2)
+              {
+                server.send(200, F("text/json"), F("{\"r\":-2,\"wnl\":[]}"));
+                WiFi.scanNetworks(true);
+              }
+              else if (n == -1)
+              {
+                server.send(200, F("text/json"), F("{\"r\":-1,\"wnl\":[]}"));
+              }
+              else
+              {
+                JsonDocument doc;
+                doc["r"] = n;
+                JsonArray wnl = doc[F("wnl")].to<JsonArray>();
+                for (byte i = 0; i < n; i++)
+                {
+                  JsonObject wnl0 = wnl.add<JsonObject>();
+                  wnl0["SSID"] = WiFi.SSID(i);
+                  wnl0["RSSI"] = WiFi.RSSI(i);
+                }
+                server.setContentLength(measureJson(doc));
+                server.send(200, F("text/json"), "");
+                WiFiClient client = server.client();
+                serializeJson(doc, client);
+                WiFi.scanDelete();
+              }
+            });
 }
 
 void WifiMan::appRun()
 {
-  //if refreshWifi is required and no client is connected to the softAP
+  // if refreshWifi is required and no client is connected to the softAP
   if (_needRefreshWifi && !_stationConnectedToSoftAP)
   {
     _needRefreshWifi = false;
     refreshWiFi();
   }
-};
+
+  if (_dnsServer)
+    _dnsServer->processNextRequest();
+
+#ifdef ESP8266
+  MDNS.update();
+#endif
+}

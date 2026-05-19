@@ -1,0 +1,36 @@
+<h2 class="content-subhead">WiFi<span id="l">
+        <h6 style="display:inline"><b> Loading...</b></h6>
+    </span></h2>
+MAC: <span id="mac"></span><br>
+Access Point: <span id="apmode"></span><br>
+<span id="apipe" style='display:none'>&nbsp;&nbsp;&nbsp;&nbsp;IP: <span id="apip"></span><br></span>
+Station: <span id="stationmode"></span><br>
+<span id="stationipe" style='display:none'>&nbsp;&nbsp;&nbsp;&nbsp;IP: <span id="stationip"></span><br></span>
+<span id="stationipsourcee" style='display:none'>&nbsp;&nbsp;&nbsp;&nbsp;IP Source: <span id="stationipsource"></span><br></span>
+
+<script>
+    //QuerySelector Prefix is added by load function to know into what element queySelector need to look for
+    //var qsp = '#content1 ';
+
+    getJSON("/gs" + qsp[8],
+        function (GS) {
+            for (k in GS) {
+                if ((e = $(qsp + '#' + k)) != undefined) e.innerHTML = GS[k];
+            }
+
+            $(qsp + "#apipe").style.display = (GS["apip"] ? '' : 'none');
+            $(qsp + "#stationipe").style.display = (GS["stationip"] ? '' : 'none');
+            $(qsp + "#stationipsourcee").style.display = (GS["stationipsource"] ? '' : 'none');
+
+            if (GS["stationmode"] == "on" && GS["apmode"] == "on") {
+                var containerDiv = document.createElement('div');
+                containerDiv.innerHTML = "<div id='connectedToAP' class='pure-button pure-button-disabled' style='width:100%;position:fixed;top:0;color: white;text-shadow: 0 1px 1px rgba(0, 0, 0, 0.2);background: rgb(202, 60, 60);opacity:1;white-space:normal;'>!!! Disconnect devices from Access Point Wifi network to allow reconnection or modify WiFi configuration !!!</div>";
+                $("#main").appendChild(containerDiv.firstChild)
+            }
+            fadeOut($(qsp + "#l"));
+        },
+        function () {
+            $(qsp + "#l").innerHTML = '<h4 style="display:inline;color:red;"><b> Failed</b></h4>';
+        }
+    );
+</script>

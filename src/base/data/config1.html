@@ -1,0 +1,156 @@
+<h2 class="content-subhead">WiFi<span id="l">
+        <h6 style="display:inline"><b> Loading...</b></h6>
+    </span></h2>
+<form class="pure-form pure-form-aligned" id='f'>
+    <fieldset>
+        <div class="pure-control-group">
+            <label for="s">SSID</label>
+            <input type='text' id='s' name='s' maxlength='32' list="wnl">
+            <select id="wnl">
+                <option>Searching...</option>
+            </select>
+        </div>
+        <div class="pure-control-group">
+            <label for="p">Password</label>
+            <input type='password' id='p' name='p' maxlength='64'>
+        </div>
+        <div class="pure-control-group">
+            <label for="h">Hostname</label>
+            <input type='text' id='h' name='h' maxlength='24'>
+        </div>
+        <div class="pure-control-group">
+            <label for="staticip">Static IP</label>
+            <input id='staticip' name='staticip' type="checkbox">
+        </div>
+        <div id='staticipgroup' style='display:none'>
+            <div class="pure-control-group">
+                <label for="ip">IP</label>
+                <input type='text' id='ip' name='ip' pattern='((^|\.)((25[0-5])|(2[0-4]\d)|(1\d\d)|([1-9]?\d))){4}$'
+                    required>
+                <span class="pure-form-message-inline">*</span>
+            </div>
+            <div class="pure-control-group">
+                <label for="gw">Gateway</label>
+                <input type='text' id='gw' name='gw' pattern='((^|\.)((25[0-5])|(2[0-4]\d)|(1\d\d)|([1-9]?\d))){4}$'
+                    required>
+                <span class="pure-form-message-inline">*</span>
+            </div>
+            <div class="pure-control-group">
+                <label for="mask">NetMask</label>
+                <input type='text' id='mask' name='mask' pattern='((^|\.)((25[0-5])|(2[0-4]\d)|(1\d\d)|([1-9]?\d))){4}$'
+                    required>
+                <span class="pure-form-message-inline">*</span>
+            </div>
+            <div class="pure-control-group">
+                <label for="dns1">DNS 1</label>
+                <input type='text' id='dns1' name='dns1'
+                    pattern='((^|\.)((25[0-5])|(2[0-4]\d)|(1\d\d)|([1-9]?\d))){4}$'>
+            </div>
+            <div class="pure-control-group">
+                <label for="dns2">DNS 2</label>
+                <input type='text' id='dns2' name='dns2'
+                    pattern='((^|\.)((25[0-5])|(2[0-4]\d)|(1\d\d)|([1-9]?\d))){4}$'>
+            </div>
+        </div>
+        <div class="pure-controls">
+            <input type='submit' value='Save' class="pure-button pure-button-primary" disabled>
+        </div>
+    </fieldset>
+</form>
+<span id='r'></span>
+
+<script>
+    //QuerySelector Prefix is added by load function to know into what element querySelector need to look for
+    //var qsp = '#content1 ';
+
+    $(qsp + "#staticip").addEventListener('change', function () {
+        if ($(qsp + "#staticip").checked) {
+            $(qsp + "#ip").required = true;
+            $(qsp + "#gw").required = true;
+            $(qsp + "#mask").required = true;
+            $(qsp + "#staticipgroup").style.display = '';
+        }
+        else {
+            $(qsp + "#ip").required = false;
+            $(qsp + "#gw").required = false;
+            $(qsp + "#mask").required = false;
+            $(qsp + "#staticipgroup").style.display = 'none';
+        }
+    });
+
+    $(qsp + "#f").addEventListener('submit', function (event) {
+        event.preventDefault();
+        if (!$(qsp + "#staticip").checked) {
+            $(qsp + "#ip").value = '';
+            $(qsp + "#gw").value = '';
+            $(qsp + "#mask").value = '';
+            $(qsp + "#dns1").value = '';
+            $(qsp + "#dns2").value = '';
+        }
+        $(qsp + "#r").innerHTML = "Saving Configuration...";
+        post("/sc" + qsp[8],
+            convertFormDataToJson(new FormData($(qsp + "#f"))),
+            function () {
+                $(qsp + "#f").style.display = 'none';
+
+                let locationCommand = 'location.';
+                if (!$(qsp + "#s").value) locationCommand += 'assign("http://192.168.4.1");';
+                else if ($(qsp + "#staticip").checked && $(qsp + "#ip").value != "0.0.0.0") locationCommand += 'assign("http://' + $(qsp + "#ip").value + '");';
+                else locationCommand += 'reload();';
+
+                $(qsp + '#r').innerHTML = '<h3><b>Configuration saved <span style="color: green;">successfully</span>. System is restarting now.</b></h3>This page will be reloaded in <span id="cd">20</span>sec.';
+                loadScript('startCountdown("#cd", 19, () => {' + locationCommand + '});');
+            },
+            function () {
+                $(qsp + '#r').innerHTML = '<h3><b>Configuration <span style="color: red;">error</span>.</b></h3>';
+            }
+        );
+    });
+
+    var getNetworkList = function () {
+
+        getJSON("/wnl", function (WNL) {
+            if (WNL.r == -2 || WNL.r == -1) { //if scan not started or is in progress
+                //try again in a couple of seconds
+                setTimeout(getNetworkList, 2000, 0);
+            }
+            else { //scan done
+                const wnl = $(qsp + "#wnl");
+                if (wnl) {
+                    if (WNL.r == 0) wnl.innerHTML = '<option>No Network Found</option>';
+                    else {
+                        wnl.innerHTML = '<option>Choose Your Network</option>';
+                        for (k in WNL.wnl) {
+                            var quality = Math.min(Math.max(2 * (WNL.wnl[k].RSSI + 100), 0), 100);
+                            const color = `hsl(${quality * 1.2}, 100%, 45%)`;
+                            wnl.innerHTML += `<option style="color:${color}" value="${WNL.wnl[k].SSID}"${$(qsp + "#s").value == WNL.wnl[k].SSID ? ' selected' : ''}>${WNL.wnl[k].SSID} (${quality}%)</option>`;
+                        }
+                        wnl.addEventListener('change', function () { $(qsp + "#s").value = wnl.value });
+                    }
+                }
+            }
+        });
+    }
+
+
+    getJSON("/gc" + qsp[8],
+        function (GC) {
+            for (k in GC) {
+                if ($(qsp + '#' + k)) {
+                    if ($(qsp + '#' + k).type != 'checkbox') $(qsp + '#' + k).value = GC[k];
+                    else $(qsp + '#' + k).checked = GC[k];
+
+                    triggerEvent($(qsp + '#' + k), 'change');
+                }
+            }
+
+            $(qsp + "#f input[type=submit]").disabled = false;
+            fadeOut($(qsp + "#l"));
+
+            getNetworkList();
+        }, function () {
+            $(qsp + "#l").innerHTML = '<h6 style="display:inline;color:red;"><b> Failed</b></h6>';
+        }
+    );
+
+</script>

@@ -1,22 +1,18 @@
 #include "Core.h"
 #include <EEPROM.h>
-// #include <SPIFFSEditor.h>
-#include "..\Main.h" //for VERSION define
+#include "../Main.h" //for VERSION define
 #include "Version.h" //for BASE_VERSION define
 
-#include "data\index.html.gz.h"
-#include "data\pure-min.css.gz.h"
-#include "data\side-menu.css.gz.h"
-#include "data\side-menu.js.gz.h"
+#include "data/index.html.gz.h"
+#include "data/pure-min.css.gz.h"
+#include "data/side-menu.css.gz.h"
+#include "data/side-menu.js.gz.h"
 
-void Core::setConfigDefaultValues(){};
-void Core::parseConfigJSON(DynamicJsonDocument &doc){};
-bool Core::parseConfigWebRequest(AsyncWebServerRequest *request) { return true; };
-String Core::generateConfigJSON(bool clearPassword = false) { return String(); };
-String Core::generateStatusJSON()
+void Core::setConfigDefaultValues() {};
+bool Core::parseConfigJSON(JsonDocument &doc, bool fromWebPage = false) { return true; };
+void Core::fillConfigJSON(JsonDocument &doc, bool forSaveFile) {};
+void Core::fillStatusJSON(JsonDocument &doc)
 {
-  String gs('{');
-
   char sn[9];
 #ifdef ESP8266
   sprintf_P(sn, PSTR("%08x"), ESP.getChipId());
@@ -25,39 +21,43 @@ String Core::generateStatusJSON()
 #endif
   unsigned long minutes = millis() / 60000;
 
-  gs = gs + F("\"sn\":\"") + sn + '"';
-  gs = gs + F(",\"b\":\"") + BASE_VERSION + '/' + VERSION + '"';
-  gs = gs + F(",\"u\":\"") + (byte)(minutes / 1440) + 'd' + (byte)(minutes / 60 % 24) + 'h' + (byte)(minutes % 60) + 'm' + '"';
-  gs = gs + F(",\"f\":") + ESP.getFreeHeap();
+  doc[F("manufacturer")] = CUSTOM_APP_MANUFACTURER;
+  doc[F("model")] = CUSTOM_APP_MODEL;
+  doc[F("sn")] = sn;
+  doc[F("baseversion")] = BASE_VERSION;
+  doc[F("version")] = VERSION;
+  char uptime[12];
+  snprintf_P(uptime, sizeof(uptime), PSTR("%dd%dh%dm"), (byte)(minutes / 1440), (byte)(minutes / 60 % 24), (byte)(minutes % 60));
+  doc[F("uptime")] = uptime;
+  doc[F("freeheap")] = ESP.getFreeHeap();
 #ifdef ESP8266
-  gs = gs + F(",\"fcrs\":") + ESP.getFlashChipRealSize();
+  doc[F("freestack")] = ESP.getFreeContStack();
+  doc[F("flashsize")] = ESP.getFlashChipRealSize();
+
+  uint32_t crashCount = CrashSaver::count();
+  doc[F("crashcount")] = crashCount;
+#else
+  doc[F("freestack")] = uxTaskGetStackHighWaterMark(nullptr);
+  doc[F("crashcount")] = 0;
 #endif
-
-  gs = gs + '}';
-
-  return gs;
+}
+bool Core::appInit(bool reInit = false)
+{
+  return true;
 };
-bool Core::appInit(bool reInit = false) { return true; };
-const uint8_t *Core::getHTMLContent(WebPageForPlaceHolder wp)
+const PROGMEM char *Core::getHTMLContent(WebPageForPlaceHolder wp)
 {
   switch (wp)
   {
   case status:
-    return (const uint8_t *)status0htmlgz;
+    return status0htmlgz;
     break;
   case config:
-    return (const uint8_t *)config0htmlgz;
-    break;
-  case fw:
-    return (const uint8_t *)fw0htmlgz;
-    break;
-  case discover:
-    return (const uint8_t *)discover0htmlgz;
+    return config0htmlgz;
     break;
   };
   return nullptr;
-};
-//and his Size
+}
 size_t Core::getHTMLContentSize(WebPageForPlaceHolder wp)
 {
   switch (wp)
@@ -68,201 +68,241 @@ size_t Core::getHTMLContentSize(WebPageForPlaceHolder wp)
   case config:
     return sizeof(config0htmlgz);
     break;
-  case fw:
-    return sizeof(fw0htmlgz);
-    break;
-  case discover:
-    return sizeof(discover0htmlgz);
-    break;
   };
   return 0;
-};
-void Core::appInitWebServer(AsyncWebServer &server, bool &shouldReboot, bool &pauseApplication)
+}
+void Core::appInitWebServer(WebServer &server)
 {
-  //root is index
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    AsyncWebServerResponse *response = request->beginResponse_P(200, F("text/html"), (const uint8_t *)indexhtmlgz, sizeof(indexhtmlgz));
-    response->addHeader("Content-Encoding", "gzip");
-    request->send(response);
-  });
+  // root is index
+  server.on("/", HTTP_GET,
+            [&server]()
+            {
+              SERVER_KEEPALIVE_FALSE()
+              server.sendHeader(F("Content-Encoding"), F("gzip"));
+              server.send_P(200, PSTR("text/html"), indexhtmlgz, sizeof(indexhtmlgz));
+            });
 
-  //sn url is a way to find module on network
-  char discoURL[10];
+  // Ressources URLs
+  server.on(F("/pure-min.css"), HTTP_GET,
+            [&server]()
+            {
+              SERVER_KEEPALIVE_FALSE()
+              server.sendHeader(F("Content-Encoding"), F("gzip"));
+              server.sendHeader(F("Cache-Control"), F("max-age=604800, public"));
+              server.send_P(200, PSTR("text/css"), puremincssgz, sizeof(puremincssgz));
+            });
+
+  server.on(F("/side-menu.css"), HTTP_GET,
+            [&server]()
+            {
+              SERVER_KEEPALIVE_FALSE()
+              server.sendHeader(F("Content-Encoding"), F("gzip"));
+              server.sendHeader(F("Cache-Control"), F("max-age=604800, public"));
+              server.send_P(200, PSTR("text/css"), sidemenucssgz, sizeof(sidemenucssgz));
+            });
+
+  server.on(F("/side-menu.js"), HTTP_GET,
+            [&server]()
+            {
+              SERVER_KEEPALIVE_FALSE()
+              server.sendHeader(F("Content-Encoding"), F("gzip"));
+              server.sendHeader(F("Cache-Control"), F("max-age=604800, public"));
+              server.send_P(200, PSTR("text/javascript"), sidemenujsgz, sizeof(sidemenujsgz));
+            });
+
+  server.on(F("/fw.html"), HTTP_GET,
+            [this, &server]()
+            {
+              SERVER_KEEPALIVE_FALSE()
+              server.sendHeader(F("Content-Encoding"), F("gzip"));
+              server.send_P(200, PSTR("text/html"), fwhtmlgz, sizeof(fwhtmlgz));
+            });
+
+  // Get Latest Update Info ---------------------------------------------------------
+  server.on(
+      F("/glui"), HTTP_GET,
+      [this, &server]()
+      {
+        SERVER_KEEPALIVE_FALSE()
+        JsonDocument doc;
+        fillLatestUpdateInfoJson(doc, true);
+        server.setContentLength(measureJson(doc));
+        server.send(200, F("application/json"), "");
+        WiFiClient client = server.client();
+        serializeJson(doc, client);
+      });
+
+  // Update Firmware from Github ----------------------------------------------
+  server.on(
+      F("/update"), HTTP_POST,
+      [this, &server]()
+      {
+        String msg;
+
+        // start chunked response
+        server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+        server.send(200, F("text/plain"), "");
+
+        // Define the progress callback function
+        std::function<void(size_t, size_t)> progressCallback = [&server](size_t progress, size_t total)
+        {
+          uint8_t percent = (progress * 100) / total;
+          LOG_SERIAL_PRINTF_P(PSTR("Progress: %d%%\n"), percent);
+          char pct[10];
+          snprintf_P(pct, sizeof(pct), PSTR("p:%d\n"), percent);
+          server.sendContent(pct);
+        };
+
+        // Call the updateFirmware function with the progress callback
+        SystemState::shouldReboot = updateFirmware(server.arg(F("plain")).c_str(), msg, progressCallback);
+        if (SystemState::shouldReboot)
+          server.sendContent(F("s:true\n"));
+        else
+        {
+          server.sendContent(F("s:false\nm:"));
+          server.sendContent(msg);
+          server.sendContent("\n");
+        }
+
+        // finalize chunked response
+        server.sendContent(emptyString);
+      });
+
+  // Firmware POST URL allows to push new firmware ----------------------------
+  server.on(
+      F("/fw"), HTTP_POST,
+      [&server]()
+      {
+        SystemState::shouldReboot = !Update.hasError();
+
+        String msg;
+
+        if (SystemState::shouldReboot)
+          msg = F("Update successful");
+        else
+        {
+          msg = F("Update failed: ");
 #ifdef ESP8266
-  sprintf_P(discoURL, PSTR("/%08x"), ESP.getChipId());
+          msg += Update.getErrorString();
 #else
-  sprintf_P(discoURL, PSTR("/%08x"), (uint32_t)(ESP.getEfuseMac() << 40 >> 40));
+          msg += Update.errorString();
 #endif
-  server.on(discoURL, HTTP_GET, [](AsyncWebServerRequest *request) {
-    char chipID[9];
+          Update.clearError();
+          // Update failed so restart to Run custom Application in loop
+          SystemState::pauseCustomApp = false;
+        }
+
+        LOG_SERIAL_PRINTLN(msg);
+
+        SERVER_KEEPALIVE_FALSE()
+        server.send(SystemState::shouldReboot ? 200 : 500, F("text/html"), msg);
+      },
+      [&server]()
+      {
+        HTTPUpload &upload = server.upload();
+
+        if (upload.status == UPLOAD_FILE_START)
+        {
+          // stop to Run custom Application in loop
+          SystemState::pauseCustomApp = true;
+
+          LOG_SERIAL_PRINTF_P(PSTR("Update Start: %s\n"), upload.filename.c_str());
+
 #ifdef ESP8266
-    sprintf_P(chipID, PSTR("%08x"), ESP.getChipId());
+          Update.begin((ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000);
 #else
-    sprintf_P(chipID, PSTR("%08x"), (uint32_t)(ESP.getEfuseMac() << 40 >> 40));
+          Update.begin();
 #endif
-    AsyncWebServerResponse *response = request->beginResponse(200, "text/html", chipID);
-    response->addHeader("Access-Control-Allow-Origin", "*"); //allow this URL to be requested from everywhere
-    response->addHeader("Cache-Control", "no-cache");
-    request->send(response);
-  });
+        }
+        else if (upload.status == UPLOAD_FILE_WRITE)
+        {
+          Update.write(upload.buf, upload.currentSize);
+        }
+        else if (upload.status == UPLOAD_FILE_END)
+        {
+          Update.end(true);
+        }
 
-  //ffffffff url is a way to find all modules on the network
-  server.on("/ffffffff", HTTP_GET, [](AsyncWebServerRequest *request) {
-    //answer with a JSON string containing sn, model and version numbers
-    char discoJSON[128];
 #ifdef ESP8266
-    sprintf_P(discoJSON, PSTR("{\"sn\":\"%08x\",\"m\":\"%s\",\"v\":\"%s\"}"), ESP.getChipId(), APPLICATION1_NAME, BASE_VERSION "/" VERSION);
-#else
-    sprintf_P(discoJSON, PSTR("{\"sn\":\"%08x\",\"m\":\"%s\",\"v\":\"%s\"}"), (uint32_t)(ESP.getEfuseMac() << 40 >> 40), APPLICATION1_NAME, BASE_VERSION "/" VERSION);
+        // Feed the dog otherwise big firmware won't pass
+        ESP.wdtFeed();
 #endif
-    AsyncWebServerResponse *response = request->beginResponse(200, "text/json", discoJSON);
-    response->addHeader("Access-Control-Allow-Origin", "*"); //allow this URL to be requested from everywhere
-    response->addHeader("Cache-Control", "no-cache");
-    request->send(response);
-  });
+        yield();
+      });
 
-  //FirmWare POST URL allows to push new firmware
-  server.on("/fw", HTTP_POST, [&shouldReboot, &pauseApplication](AsyncWebServerRequest *request) {
-    shouldReboot = !Update.hasError();
-    if (shouldReboot) {
-      AsyncWebServerResponse *response = request->beginResponse(200, F("text/html"), F("Firmware Successfully Uploaded<script>setTimeout(function(){if('referrer' in document)window.location=document.referrer;},10000);</script>"));
-      response->addHeader("Connection", "close");
-      request->send(response);
-    }
-    else {
-      //Upload failed so restart to Run Application in loop
-      pauseApplication = false;
-      //Prepare response
-      String errorMsg(Update.getError());
-      errorMsg+=' ';
+  // reboot POST --------------------------------------------------------------
+  server.on(F("/rbt"), HTTP_POST,
+            [&server]()
+            {
+              if (server.hasArg(F("rescue")))
+              {
+                // Set EEPROM for Rescue mode flag
+                EEPROM.begin(4);
+                EEPROM.write(0, 1);
+                EEPROM.end();
+              }
+              SERVER_KEEPALIVE_FALSE()
+              server.send_P(200, PSTR("text/html"), PSTR("Reboot command received"));
+              SystemState::shouldReboot = true;
+            });
+
 #ifdef ESP8266
-      switch(Update.getError()){
-        case UPDATE_ERROR_WRITE:
-          errorMsg=F("Flash Write Failed");
-          break;
-        case UPDATE_ERROR_ERASE:
-          errorMsg=F("Flash Erase Failed");
-          break;
-        case UPDATE_ERROR_READ:
-          errorMsg=F("Flash Read Failed");
-          break;
-        case UPDATE_ERROR_SPACE:
-          errorMsg=F("Not Enough Space");
-          break;
-        case UPDATE_ERROR_SIZE:
-          errorMsg=F("Bad Size Given");
-          break;
-        case UPDATE_ERROR_STREAM:
-          errorMsg=F("Stream Read Timeout");
-          break;
-        case UPDATE_ERROR_MD5:
-          errorMsg=F("MD5 Check Failed");
-          break;
-        case UPDATE_ERROR_FLASH_CONFIG:
-          errorMsg=F("Flash config wrong");
-          break;
-        case UPDATE_ERROR_NEW_FLASH_CONFIG:
-          errorMsg=F("New Flash config wrong");
-          break;
-        case UPDATE_ERROR_MAGIC_BYTE:
-          errorMsg=F("Magic byte is wrong, not 0xE9");
-          break;
-        case UPDATE_ERROR_BOOTSTRAP:
-          errorMsg=F("Invalid bootstrapping state, reset ESP8266 before updating");
-          break;
-        default:
-          errorMsg=F("Unknown error");
-          break;
-      }
-#else
-      errorMsg=Update.errorString();
-#endif
-      AsyncWebServerResponse *response = request->beginResponse(500, F("text/html"), errorMsg);
-      response->addHeader("Connection", "close");
-      request->send(response);
-    } }, [&pauseApplication](AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
-    if (!index) {
-      //stop to Run Application in loop
-      pauseApplication = true;
-#ifdef LOG_SERIAL
-      LOG_SERIAL.printf("Update Start: %s\n", filename.c_str());
-#endif
-#ifdef ESP8266
-      Update.runAsync(true);
-      if (!Update.begin((ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000)) {
-#else
-      if (!Update.begin()) {
-#endif
-#ifdef LOG_SERIAL
-        Update.printError(LOG_SERIAL);
-#endif
-      }
-    }
-    if (!Update.hasError()) {
-#ifdef ESP8266
-      //Feed the dog otherwise big firmware won't pass
-      ESP.wdtFeed();
-#endif
-      if (Update.write(data, len) != len) {
-#ifdef LOG_SERIAL
-        Update.printError(LOG_SERIAL);
-#endif
-      }
-    }
-    if (final) {
-      if (Update.end(true)) {
-#ifdef LOG_SERIAL
-        LOG_SERIAL.printf("Update Success: %uB\n", index + len);
-      } else {
-        Update.printError(LOG_SERIAL);
-#endif
-      }
-    } });
+  // Download all crash logs as text attachment -------------------------------
+  server.on(F("/crashdl"), HTTP_GET,
+            [&server]()
+            {
+              SERVER_KEEPALIVE_FALSE()
+              server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+              server.sendHeader(F("Content-Disposition"), F("attachment; filename=\"crashes.txt\""));
+              server.send(200, F("text/plain"), "");
+              CrashSaver::iterateCrashLogFiles([&server](uint32_t, const char *fileName)
+                                                   {
+                File f = LittleFS.open(fileName, "r");
+                if (f) {
+                  server.sendContent(F("--- "));
+                  server.sendContent(fileName);
+                  server.sendContent(F(" ---\n"));
+                  server.sendContent(f.readString());
+                  f.close();
+                } });
+              server.sendContent(emptyString);
+            });
 
-  //reboot POST
-  server.on("/rbt", HTTP_POST, [&shouldReboot](AsyncWebServerRequest *request) {
-    request->send_P(200,F("text/html"),PSTR("Reboot command received<script>setTimeout(function(){if('referrer' in document)window.location=document.referrer;},30000);</script>"));
-    shouldReboot = true; });
+  // Clear all crash logs -----------------------------------------------------
+  server.on(F("/crashclr"), HTTP_POST,
+            [&server]()
+            {
+              SERVER_KEEPALIVE_FALSE()
+              CrashSaver::clearAllLogs();
+              server.send_P(200, PSTR("text/plain"), PSTR("OK"));
+            });
 
-  //reboot Rescue POST
-  server.on("/rbtrsc", HTTP_POST, [&shouldReboot](AsyncWebServerRequest *request) {
-    request->send_P(200,F("text/html"),PSTR("Reboot in rescue command received<script>setTimeout(function(){if('referrer' in document)window.location=document.referrer;},30000);</script>"));
-    //Set EEPROM for Rescue mode flag
-    EEPROM.begin(4);
-    EEPROM.write(0, 1);
-    EEPROM.end();
-    shouldReboot = true; });
+#if DEVELOPPER_MODE
+  // dbz endpoint try to do a division by 0 to trigger a crash for testing purposes
+  server.on(F("/dbz"), HTTP_GET,
+            [&server]()
+            {
+              SERVER_KEEPALIVE_FALSE()
+              volatile int a = 1;
+              volatile int b = 0;
+              volatile int c = a / b;
+              (void)c; // avoid unused variable warning
+              server.send_P(200, PSTR("text/html"), PSTR("This should never be seen"));
+            });
+#endif
+#endif
 
-  //Ressources URLs
-  server.on("/pure-min.css", HTTP_GET, [](AsyncWebServerRequest *request) {
-    AsyncWebServerResponse *response = request->beginResponse_P(200, F("text/css"), (const uint8_t *)puremincssgz, sizeof(puremincssgz));
-    response->addHeader("Content-Encoding", "gzip");
-    response->addHeader("Cache-Control", "max-age=604800, public");
-    request->send(response);
-  });
-
-  server.on("/side-menu.css", HTTP_GET, [](AsyncWebServerRequest *request) {
-    AsyncWebServerResponse *response = request->beginResponse_P(200, F("text/css"), (const uint8_t *)sidemenucssgz, sizeof(sidemenucssgz));
-    response->addHeader("Content-Encoding", "gzip");
-    response->addHeader("Cache-Control", "max-age=604800, public");
-    request->send(response);
-  });
-
-  server.on("/side-menu.js", HTTP_GET, [](AsyncWebServerRequest *request) {
-    AsyncWebServerResponse *response = request->beginResponse_P(200, F("text/javascript"), (const uint8_t *)sidemenujsgz, sizeof(sidemenujsgz));
-    response->addHeader("Content-Encoding", "gzip");
-    response->addHeader("Cache-Control", "max-age=604800, public");
-    request->send(response);
-  });
-
-  //Special Developper pages
-  // wait for LittleFSEditor
-// #if DEVELOPPER_MODE
-//   server.addHandler(new SPIFFSEditor("TODO", "TODO"));
-// #endif
-
-  //404 on not found
-  server.onNotFound([](AsyncWebServerRequest *request) {
-    request->send(404);
-  });
+  // 302 on not found ---------------------------------------------------------
+  server.onNotFound(
+      [&server]()
+      {
+        // redirect to my IP receiving the request
+        SERVER_KEEPALIVE_FALSE()
+        char redirectUrl[32];
+        IPAddress ip = server.client().localIP();
+        snprintf_P(redirectUrl, sizeof(redirectUrl), PSTR("http://%d.%d.%d.%d"), ip[0], ip[1], ip[2], ip[3]);
+        server.sendHeader(F("Location"), redirectUrl, true);
+        server.send(302, F("text/plain"), ""); // Empty content inhibits Content-length header so we have to close the socket ourselves.
+        server.client().stop();
+      });
 }

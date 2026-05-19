@@ -1,0 +1,289 @@
+<style>
+    .pure-control-group label {
+        font-weight: bold;
+    }
+
+    .spinner {
+        border: 2px solid rgba(255, 255, 255, 0.3);
+        border-left-color: #fff;
+        border-radius: 50%;
+        width: 12px;
+        height: 12px;
+        display: inline-block;
+        animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+        0% {
+            transform: rotate(0deg);
+        }
+
+        100% {
+            transform: rotate(360deg);
+        }
+    }
+</style>
+
+<h2>Current Firmware<span id="l1">
+        <h6 style="display:inline"><b> Loading...</b></h6>
+    </span></h2>
+<div class="pure-form pure-form-aligned">
+    <div class="pure-control-group">
+        <label for="installed_version">Version</label>
+        <span id='installed_version'></span>
+    </div>
+</div>
+
+<h2>Online Update<span id="l2">
+        <h6 style="display:inline"><b> Loading...</b></h6>
+    </span></h2>
+<div class="pure-form pure-form-aligned">
+    <div class="pure-control-group">
+        <label for="latest_version">Latest Version</label>
+        <span id='latest_version'></span>
+    </div>
+    <div class="pure-control-group">
+        <label for="title">Title</label>
+        <span id='title' style="display: inline-block;"></span>
+    </div>
+    <div class="pure-control-group">
+        <label for="release_date">Release Date</label>
+        <span id='release_date'></span>
+    </div>
+    <div class="pure-control-group">
+        <label for="release_summary" style="vertical-align: top;">Summary</label>
+        <span id='release_summary' style="display: inline-block;"></span>
+    </div>
+
+    <div class="pure-control-group">
+        <label for="release_url">URL</label>
+        <span id='release_url'></span>
+    </div>
+    <div class="pure-controls">
+        <button class="pure-button pure-button-primary" id="refreshButton" style="background: #1cb841;">Refresh</button>
+        <button class="pure-button pure-button-primary" id="updateButton" style="background: #df7514;"
+            disabled>Update</button>
+        &nbsp;&nbsp;<span id='rUpdate'></span>
+    </div>
+</div>
+
+<h2>Manual Update</h2>
+<form class="pure-form pure-form-aligned" id="f" method='POST' action='/fw' enctype='multipart/form-data'>
+    <fieldset>
+        <div class="pure-control-group">
+            <label for="name">Firmware File</label>
+            <input type='file' name='fi' id='fi' accept='.bin' required>
+        </div>
+        <div class="pure-controls">
+            <button type='submit' id='uploadButton' class="pure-button pure-button-primary">Upload Firmware</button>
+            &nbsp;&nbsp;<span id='rUpload'></span>
+        </div>
+    </fieldset>
+</form>
+
+<script>
+    // QuerySelector Prefix is added by load function to know into what element querySelector needs to look for
+    // var qsp = '#content0 ';
+
+    function firmwareValidation() {
+        const fileInput = $(qsp + '#fi');
+        const model = $("#model").innerText; <!-- div available at top of index.html -->
+        if (!fileInput || !model) {
+            return false;
+        }
+
+        let fn = fileInput.value.split(/(\\|\/)/g).pop();
+
+        // Define the patterns for the filename
+        const esp32Pattern = '(\\.esp32)?';
+        const versionPattern = '(\\.\\d+\\.\\d+\\.\\d+)?';
+        const filenamePattern1 = new RegExp(`^${model}${esp32Pattern}${versionPattern}\\.bin$`, 'i');
+        let filenamePattern2 = null;
+
+        // If model starts with 'W', define an additional pattern
+        if (model.startsWith('W')) {
+            const modelWithoutFirstChar = model.substring(1);
+            filenamePattern2 = new RegExp(`^Wireless${modelWithoutFirstChar}${esp32Pattern}${versionPattern}\\.bin$`, 'i');
+        }
+
+        // Check if the filename matches either pattern
+        if (!filenamePattern1.test(fn) && (!filenamePattern2 || !filenamePattern2.test(fn))) {
+            alert(`You didn't select a valid Firmware file for ${model}`);
+            return false;
+        }
+        return confirm("Please do not power off the device during the update process.");
+    }
+
+    function compareVersions(installed, latest) {
+        const installedParts = installed.split('.').map(Number);
+        const latestParts = latest.split('.').map(Number);
+
+        for (let i = 0; i < Math.max(installedParts.length, latestParts.length); i++) {
+            const installedPart = installedParts[i] || 0;
+            const latestPart = latestParts[i] || 0;
+            if (installedPart < latestPart) { return -1; }
+            if (installedPart > latestPart) { return 1; }
+        }
+        return 0;
+    }
+
+    function disableAllButtons() {
+        $(qsp + '#refreshButton').disabled = true;
+        $(qsp + '#updateButton').disabled = true;
+        $(qsp + '#fi').readOnly = true;
+        $(qsp + '#uploadButton').disabled = true;
+    }
+
+    function calculateAllButtonStates() {
+        const refreshButton = $(qsp + '#refreshButton');
+        refreshButton.innerHTML = 'Refresh';
+        refreshButton.disabled = false;
+
+        const installedVersion = $(qsp + '#installed_version').textContent;
+        const latestVersion = $(qsp + '#latest_version').textContent;
+        const updateButton = $(qsp + '#updateButton');
+        if (compareVersions(latestVersion, installedVersion) > 0) {
+            updateButton.disabled = false;
+            updateButton.innerHTML = 'Update';
+        } else {
+            updateButton.disabled = true;
+            updateButton.innerHTML = latestVersion ? 'Up to date' : 'Update';
+        }
+
+        const uploadButton = $(qsp + '#uploadButton');
+        uploadButton.innerHTML = 'Upload Firmware';
+        uploadButton.disabled = false;
+        $(qsp + '#fi').readOnly = false;
+    }
+
+    function getLastestUpdateInfo() {
+
+        disableAllButtons();
+
+        const refreshButton = $(qsp + "#refreshButton");
+
+        // Show loading animation
+        refreshButton.innerHTML = '<span class="spinner"></span> Refreshing...';
+
+        // clear previous values
+        ['#latest_version', '#title', '#release_date', '#release_summary', '#release_url'].forEach(id => {
+            $(qsp + id).innerHTML = '';
+        });
+
+        getJSON('/glui',
+            (GUI) => {
+                for (k in GUI) {
+                    if ((e = $(qsp + '#' + k)) != undefined) e.innerHTML = GUI[k];
+                }
+                // transform the release url into a clickable link
+                const releaseUrlSpan = $(qsp + '#release_url');
+                const url = releaseUrlSpan.innerHTML;
+                if (url) {
+                    releaseUrlSpan.innerHTML = `<a href="${url}" target="_blank">${url}</a>`;
+                }
+
+                // transform line breaks into <br> tags in the release summary
+                const releaseSummarySpan = $(qsp + '#release_summary');
+                const summary = releaseSummarySpan.innerHTML;
+                if (summary) {
+                    releaseSummarySpan.innerHTML = summary.replace(/\r\n/g, '<br>').replace(/\n/g, '<br>');
+                }
+
+                // Update buttons
+                calculateAllButtonStates();
+
+                fadeOut($(qsp + "#l1"));
+                fadeOut($(qsp + "#l2"));
+
+            },
+            () => {
+
+                calculateAllButtonStates();
+                ['#l1', '#l2'].forEach(id => {
+                    $(qsp + id).innerHTML = '<h4 style="display:inline;color:red;"><b> Failed</b></h4>';
+                });
+            }
+        );
+    }
+    getLastestUpdateInfo();
+    $(qsp + "#refreshButton").addEventListener('click', () => { getLastestUpdateInfo(); });
+
+    $(qsp + "#updateButton").addEventListener('click', (evt) => {
+        evt.preventDefault();
+        disableAllButtons();
+
+        $(qsp + '#updateButton').innerHTML = '<span class="spinner"></span> <span id="progress">0%</span>';
+
+        fetch('/update', {
+            method: 'POST',
+            body: $(qsp + '#latest_version').textContent
+        })
+            .then(response => {
+                if (!response.ok) {
+                    return response.text().then(text => { throw new Error(text); });
+                }
+                const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+                let chunkAccumulator = '';
+                let success = false, message = '';
+
+                function processChunk({ done, value }) {
+                    if (done) {
+                        if (success) {
+                            $(qsp + '#progress').innerHTML = 'Rebooting...';
+                            $(qsp + '#rUpdate').innerHTML = '<h3>Page refresh in <span id="cd">20</span>sec.</h3>';
+                            loadScript('startCountdown("#cd", 19, () => { location.reload(); });');
+                        } else {
+                            $(qsp + '#rUpdate').innerHTML = `<span style="color: red;"><b>Failed</b></span> (${message})`;
+                            calculateAllButtonStates();
+                        }
+                        return;
+                    }
+                    chunkAccumulator += value;
+                    const chunks = chunkAccumulator.split('\n');
+                    chunkAccumulator = chunks.pop();
+                    chunks.forEach((chunk, index) => {
+                        if (chunk.startsWith('p:')) $(qsp + '#progress').innerHTML = `${parseInt(chunk.substring(2))}%`;
+                        else if (chunk.startsWith('s:')) success = chunk.substring(2) === 'true';
+                        else if (chunk.startsWith('m:')) message = chunk.substring(2);
+                    });
+                    reader.read().then(processChunk); // Read the next chunk
+                }
+                reader.read().then(processChunk); // Start reading chunks
+            })
+            .catch(error => {
+                $(qsp + '#rUpdate').innerHTML = `<span style="color: red;"><b>Failed</b></span> (${error.message})`;
+                calculateAllButtonStates();
+            });
+    });
+
+    $(qsp + "#f").addEventListener('submit', (evt) => {
+        evt.preventDefault();
+        if (!firmwareValidation()) return;
+        disableAllButtons();
+
+        // Add loading animation to the submit button
+        $(qsp + '#uploadButton').innerHTML = '<span class="spinner"></span> <span id="progress">0%</span>';
+
+        post('/fw',
+            new FormData($(qsp + '#f')),
+            () => {
+                $(qsp + '#progress').innerHTML = 'Rebooting...';
+                $(qsp + '#rUpload').innerHTML = '<h3>Page refresh in <span id="cd">20</span>sec.</h3>';
+                loadScript('startCountdown("#cd", 19, () => {location.reload();});');
+            },
+            (responseText) => {
+                $(qsp + '#rUpload').innerHTML = `<span style="color: red;"><b>Failed</b></span> (${responseText})`;
+                $(qsp + '#f').reset();
+                calculateAllButtonStates();
+            },
+            30000,
+            function (evt) {
+                if (evt.lengthComputable) {
+                    const percentComplete = Math.round((evt.loaded / evt.total) * 100);
+                    $(qsp + '#progress').innerHTML = `${percentComplete}%`;
+                }
+            }
+        );
+    }
+    );
+</script>
